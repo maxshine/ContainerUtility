@@ -11,3 +11,8 @@ This tool is used to manipulate docker container RW layer easily with device map
 
 For usage, please just issue the command `dm_mount.sh` to view.
 
+2. dm_size.sh
+This tool is to enlarge container RW layer size. By default it is 10G when container is created with defaults. It support to update the size when container is running or existed
+
+For usage please just issue the command `dm_size.sh` to view
+
