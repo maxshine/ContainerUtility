@@ -9,5 +9,5 @@ Therefore, this project is initialed to host a set of utility I developed to fac
 1. dm_mount.sh
 This tool is used to manipulate docker container RW layer easily with device mapper driver. As we all know, the default behavior of docker suite will remove virtual block driver when the container is down and it can not be accessed unless you let container up. The tool would help you do this even if the container is dead, as long as its RW layer is still there.
 
-For usage, please just issue the command `dm_tool.sh` to view.
+For usage, please just issue the command `dm_mount.sh` to view.
 
