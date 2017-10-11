@@ -153,6 +153,19 @@ function change_container_size_online()
     echo $new_table
     dmsetup load $dev_name --table "$new_table"
     exit_on_error "Fail to update online table for device $dev_name"
+    dmsetup resume $dev_name
+    exit_on_error "Fail to swap device table"
+    grow_device_fs $dev_name
+}
+
+function grow_device_fs()
+{
+    type=`blkid -o udev /dev/mapper/$1 | grep TYPE | cut -d '=' -f 2`
+    if [ x${type}x == xxfsx ]
+    then
+	xfs_growfs `cat /proc/mounts | grep $1 | cut -d ' ' -f 2`
+    else
+	resize2fs "/dev/mapper/$1"
 }
 
 if [ $# -ne 2 ]
@@ -179,7 +192,7 @@ if [ x${status}x == xrunningx ]
 then
     change_container_size_online $container_name $size
     change_container_size_offline $container_name $size
-elif [ x${status}x == xexitedx ]
-then
-    change_container_size_offline $container_name $size
+else
+    echo "The container status is in-compatible, exiting.."
+    exit 1
 fi
