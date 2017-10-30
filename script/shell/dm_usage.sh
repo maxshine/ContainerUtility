@@ -36,9 +36,8 @@ CURRENTDIR=`cd $(dirname $0);pwd`
 
 function usage()
 {
-    echo "$0 <container name> <size in bytes>"
-    echo "Warn: new size must not be less than original"
-    echo "Example: $0 bvt_web_1 10737418240"
+    echo "$0 <container name> "
+    echo "Example: $0 bvt_web_1"
 }
 
 function exit_on_error()
@@ -79,21 +78,23 @@ function echo_on_success()
 
 }
 
+function calc_percentage()
+{
+    result=`echo "scale=4;$1 / $2 * 100" | bc -l`
+    echo $result
+}
+
 function check_container_existence()
 {
     docker inspect $1 2>&1 >/dev/null
     exit_on_error "Container $1 DOSE NOT EXIST !"
 }
 
+
 function check_daemon()
 {
     docker container --help $1 2>&1 >/dev/null
     exit_on_error "Docker Daemon is not available !"
-}
-
-function get_container_status()
-{
-    echo `docker inspect --format '{{.State.Status}}' bvt_web_1`
 }
 
 function get_driver_type()
@@ -134,6 +135,14 @@ function check_device_noexistence()
     exit_on_success "Stroage Device of $1 DOES EXIST !"
 }
 
+function check_device_status()
+{
+    # return code : 0 - exist; 1 - no exist
+    device_name=`get_device_name $1`
+    ls /dev/mapper/$device_name 2>$1 >/dev/null
+    return $?
+}
+
 function get_major_dev_no()
 {
     tmp=`awk '{if($2=="device-mapper") {print $1}}' /proc/devices`
@@ -147,6 +156,11 @@ function get_device_name_prefix()
     echo `ls /dev/mapper/ | grep pool | cut -d '-' -f 1-3`
 }
 
+function get_pool_device_name()
+{
+    echo `ls /dev/mapper/ | grep pool`
+}
+
 function get_minor_dev_no()
 {
     prefix=`get_device_name_prefix`
@@ -155,77 +169,100 @@ function get_minor_dev_no()
     echo $minor_no
 }
 
-function get_thin_pool_size()
+function activate_device()
 {
     dev_name=`get_device_name $1`
-    id=`echo $dev_name | cut -d '-' -f 4`
-    pool_name=${dev_name/$id/pool}
-    echo `dmsetup table $pool_name | cut -d ' ' -f 2`
+    dev_id=`get_device_id $1`
+    dev_size=`get_device_size $1`
+    major=`get_major_dev_no`
+    minor=`get_minor_dev_no`
+    table="0 $dev_size thin $major:$minor $dev_id"
+#    echo $table
+    dmsetup create "$dev_name" --addnodeoncreate --table "$table"
+    exit_on_error "Erro while activating dm device"
 }
 
-function change_container_size_offline()
-{
-    id=`echo $(get_device_name $1) | cut -d '-' -f 4`
-    dst_file=/var/lib/docker/devicemapper/metadata/$id
-    cp -f $dst_file /tmp/
-    exit_on_error "Fail to read container metadata"
-    sed -i -e "s/\"size\":[0-9]*/\"size\":$2/" /tmp/$id
-    exit_on_error "Fail to update container offline size"
-    cp -f /tmp/$id /var/lib/docker/devicemapper/metadata/
-    exit_on_error "Fail to update container metadata"
-}
-
-function change_container_size_online()
+function deactivate_device()
 {
     dev_name=`get_device_name $1`
-    exit_on_error "Fail to retrieve device name for container $1"
-    old_table=`dmsetup table $dev_name`
-    echo $old_table
-    exit_on_error "Fail to read exsiting table for $dev_name"
-    new_table=`echo $old_table | sed -n -E -e s/.*\(thin.*\)/0\ $2\ \\\\1/p`
-    echo $new_table
-    dmsetup load $dev_name --table "$new_table"
-    exit_on_error "Fail to update online table for device $dev_name"
-    dmsetup resume $dev_name
-    exit_on_error "Fail to swap device table"
-    grow_device_fs $dev_name
+    dev_id=`get_device_id $1`
+    dev_size=`get_device_size $1`
+    major=`get_major_dev_no`
+    minor=`get_minor_dev_no`
+    dmsetup remove $dev_name
+    exit_on_error "Erro while deactivating dm device"
 }
 
-function grow_device_fs()
+function get_pool_usage()
 {
-    type=`blkid -o udev /dev/mapper/$1 | grep TYPE | cut -d '=' -f 2`
-    if [ x${type}x == xxfsx ]
-    then
-	xfs_growfs `cat /proc/mounts | grep $1 | cut -d ' ' -f 2`
-    else
-	resize2fs "/dev/mapper/$1"
+    params=`dmsetup status $(get_pool_device_name)`
+    exit_on_error "Error while retrieve device information"
+    meta_used_raw=`echo $params | cut -d ' ' -f 5 | cut -d '/' -f 1`
+    meta_total_raw=`echo $params | cut -d ' ' -f 5 | cut -d '/' -f 2`
+    data_used_raw=`echo $params | cut -d ' ' -f 6 | cut -d '/' -f 1`
+    data_total_raw=`echo $params | cut -d ' ' -f 6 | cut -d '/' -f 2`
+
+    sector_in_block=`expr $(echo $params | cut -d ' ' -f 2) / $data_total_raw`
+    bytes_in_block=`expr $sector_in_block \* 512`
+
+    meta_used=`expr $meta_used_raw \* $bytes_in_block`
+    meta_total=`expr $meta_total_raw \* $bytes_in_block`
+    data_used=`expr $data_used_raw \* $bytes_in_block`
+    data_total=`expr $data_total_raw \* $bytes_in_block`
+    echo "Pool Usage - Meta : `calc_percentage $meta_used $meta_total`% ($meta_total) Data : `calc_percentage $data_used $data_total`% ($data_total)"
 }
 
-if [ $# -ne 2 ]
-then
-    usage
-fi
+function get_container_usage()
+{
+    device_name=`get_device_name $1`
+    params=`dmsetup status $device_name`
+    exit_on_error "Error : Fail to retrieve device information for $1"
+    size_total=`echo $params | cut -d ' ' -f 5`
+    size_used=`echo $params | cut -d ' ' -f 4`
+    echo "Container Usage $1 - `calc_percentage $size_used $size_total`% (`expr $size_total \* 512`)"
+}
 
-container_name=$1
-size_byte=$2
-size=`expr $size_byte / 512`
-pool_size=`get_thin_pool_size $container_name`
 
-if [ $size -ge $pool_size ]
-then
-    echo "Error: device size $size must be less than pool size $pool_size"
-    exit 1
-fi
+case $1 in
+    "all")
+	if [ $# -ne 1 ]
+	then
+	    usage
+	fi
+	check_daemon
+	for i in `docker container ls -a -q`
+	do
+	    check_container_existence $i
+	    check_device_status $i
+	    if [ $? -eq 0 ] 
+	    then
+		get_container_usage $i
+	    else
+		
+		activate_device $i
+		get_container_usage $i
+		deactivate_device $i
+	    fi	    
+	done	
+	;;
+    *)
+	if [ $# -ne 1 ]
+	then
+	    usage
+	fi
 
-check_daemon
-check_container_existence $container_name
-status=`get_container_status $container_name`
+	check_daemon
+	check_container_existence $1
+	check_device_status $1
+	if [ $? -eq 0 ] 
+	then
+	    get_container_usage $1
+	else
 
-if [ x${status}x == xrunningx ]
-then
-    change_container_size_online $container_name $size
-    change_container_size_offline $container_name $size
-else
-    echo "The container status is in-compatible, exiting.."
-    exit 1
-fi
+	    activate_device $1
+	    get_container_usage $1
+	    deactivate_device $1
+	fi
+	;;
+esac
+get_pool_usage

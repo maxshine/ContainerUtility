@@ -14,5 +14,9 @@ For usage, please just issue the command `dm_mount.sh` to view.
 2. dm_size.sh
 This tool is to enlarge container RW layer size. By default it is 10G when container is created with defaults. It support to update the size when container is running or existed
 
-For usage please just issue the command `dm_size.sh` to view
+For usage please just issue the command `dm_size.sh` to view.
 
+3. dm_usage.sh
+This tool is to print out the usage information of devicemapper devices used by specific container and the device pool used by docker daemon. Pleaes note the information is viewed from device perspective. So, it may be slightly different from the statistics from filesystem view.
+
+For usage please just issue the command `dm_usage.sh` to view.
